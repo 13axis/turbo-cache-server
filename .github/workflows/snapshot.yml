@@ -1,0 +1,91 @@
+# A test image of any commit, between releases: run by hand on a branch.
+#
+# It builds the image from source (./Dockerfile, linux/amd64 only, one
+# runner) and pushes it as ghcr.io/<owner>/turbo-cache-server:sha-<sha12>,
+# never as a version or latest, with its CycloneDX SBOM (Syft) attached to
+# the pushed digest as an OCI 1.1 referrer (ORAS). Releases are release.yml.
+name: Snapshot image
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: snapshot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build and push
+        id: push
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${REPOSITORY,,}"
+          tag="$image:sha-${GITHUB_SHA::12}"
+          rust=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          # The source label links the package to this repository, which is
+          # what lets this job's token push to it.
+          docker build --build-arg RUST_VERSION="$rust" \
+            --label "org.opencontainers.image.source=https://github.com/$REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$tag" .
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          docker push "$tag"
+          digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$tag")
+          echo "### Snapshot image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$tag@${digest#*@}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
+
+      # Same tools, versions and checks as release.yml.
+      - name: SBOM
+        env:
+          IMAGE: ${{ steps.push.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          SYFT_VERSION: 1.54.1
+          SYFT_SHA256: c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+          ORAS_VERSION: 1.3.4
+          ORAS_SHA256: f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest: '$DIGEST'" >&2; exit 1; }
+          bin="$RUNNER_TEMP/sbom-tools"
+          mkdir -p "$bin"
+          curl -fsSL -o "$bin/syft.tgz" "https://github.com/anchore/syft/releases/download/v$SYFT_VERSION/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$bin/oras.tgz" "https://github.com/oras-project/oras/releases/download/v$ORAS_VERSION/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$SYFT_SHA256" "$bin/syft.tgz" "$ORAS_SHA256" "$bin/oras.tgz" | sha256sum -c --quiet
+          tar -xzf "$bin/syft.tgz" -C "$bin" syft
+          tar -xzf "$bin/oras.tgz" -C "$bin" oras
+          ref="$IMAGE@$DIGEST"
+          cd "$RUNNER_TEMP"
+          SYFT_CHECK_FOR_APP_UPDATE=false \
+          SYFT_REGISTRY_AUTH_AUTHORITY=ghcr.io \
+          SYFT_REGISTRY_AUTH_USERNAME="$ACTOR" \
+          SYFT_REGISTRY_AUTH_PASSWORD="$TOKEN" \
+            "$bin/syft" scan "registry:$ref" --quiet --select-catalogers +sbom-cataloger \
+              -o cyclonedx-json=turbo-cache-server.cdx.json
+          jq -e 'any(.components[]; .name == "actix-web")' turbo-cache-server.cdx.json >/dev/null \
+            || { echo "the SBOM lists no Rust crates" >&2; exit 1; }
+          printf '%s' "$TOKEN" | "$bin/oras" attach --no-tty \
+            -u "$ACTOR" --password-stdin \
+            --artifact-type application/vnd.cyclonedx+json \
+            --format go-template --template '{{.digest}}' \
+            "$ref" turbo-cache-server.cdx.json:application/vnd.cyclonedx+json > sbom-digest
+          printf '%s' "$TOKEN" | "$bin/oras" discover --no-tty -u "$ACTOR" --password-stdin \
+            --artifact-type application/vnd.cyclonedx+json --format json "$ref" > referrers.json
+          jq -e --arg d "$(cat sbom-digest)" 'any(.referrers[]; .digest == $d)' referrers.json >/dev/null \
+            || { echo "SBOM $(cat sbom-digest) not among the referrers of $ref" >&2; cat referrers.json >&2; exit 1; }
+          echo "SBOM: CycloneDX, $(jq '.components | length' turbo-cache-server.cdx.json) components, attached as \`$(cat sbom-digest)\`" >> "$GITHUB_STEP_SUMMARY"

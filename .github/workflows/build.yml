@@ -1,6 +1,15 @@
 name: Build binary
+# Only when the packaging could change: it builds on three runners.
 on:
   pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - Dockerfile
+      - Dockerfile.release
+      - .github/workflows/build*.yml
+      - .github/scripts/**
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: false
