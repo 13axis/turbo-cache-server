@@ -368,6 +368,10 @@ for inspiration.
 For folks using Gitlab or any other CI environment that supports Docker,
 you can run the Turbo Cache Server as a docker container:
 
+TURBO_TOKENS_DIR and its volume are optional: per-team tokens, see
+[Multi-tenancy](#multi-tenancy-per-team-tokens). Use `-e TURBO_TOKEN=...`
+instead for one shared token, or neither for no authentication.
+
 ```shell
 docker run \
   -e S3_ACCESS_KEY=KEY \
@@ -376,8 +380,6 @@ docker run \
   -e S3_ENDPOINT=https://s3_endpoint_here \
   -e S3_REGION=eu \
   -e S3_SERVER_SIDE_ENCRYPTION=AES256 \
-  # Optional: per-team tokens, see "Multi-tenancy" above
-  # (mount the directory with -v), or one shared TURBO_TOKEN.
   -e TURBO_TOKENS_DIR=/etc/turbo-cache/tokens \
   -v "$PWD/tokens:/etc/turbo-cache/tokens:ro" \
   -p "8000:8000" \
