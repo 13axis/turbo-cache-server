@@ -1,9 +1,8 @@
 name: "CI Checks"
+# Pull requests only: main only changes through them.
 on:
-  push:
-    branches:
-      - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
   packaging-contract:

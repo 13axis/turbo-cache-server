@@ -30,8 +30,8 @@ jobs:
       group: linux-buildcache-${{ matrix.arch }}-${{ github.ref }}
       cancel-in-progress: false
     env:
-      # Keep caches in the existing public package so fork PRs can restore anonymously.
-      CACHE_REF: ghcr.io/brunojppb/turbo-cache-server:buildcache-${{ matrix.arch }}
+      # Keep caches in the repository's public package so fork PRs can restore anonymously.
+      CACHE_REF: ghcr.io/${{ github.repository }}:buildcache-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Stage release version

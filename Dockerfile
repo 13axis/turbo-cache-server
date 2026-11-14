@@ -3,7 +3,8 @@ ARG RUST_VERSION=1.100.0
 FROM rust:${RUST_VERSION}-alpine AS chef
 WORKDIR /app
 RUN apk add --no-cache musl-dev perl make && \
-    cargo install --locked cargo-chef --version 0.1.78
+    cargo install --locked cargo-chef --version 0.1.78 && \
+    cargo install --locked cargo-auditable --version 0.7.7
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
@@ -17,7 +18,9 @@ RUN cargo chef cook --release --locked --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
 COPY tests ./tests
-RUN cargo build --release --locked --bin decay
+# cargo-auditable embeds the dependency tree in the binary, so SBOM tools
+# (Syft, Trivy) list the crates the server actually runs with.
+RUN cargo auditable build --release --locked --bin decay
 
 # Export a binary directly; no image registry or temporary container needed.
 FROM scratch AS artifact
